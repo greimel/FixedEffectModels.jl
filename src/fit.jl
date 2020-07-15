@@ -163,9 +163,20 @@ function reg(@nospecialize(df),
     # for a Vector{Float64}, conver(Vector{Float64}, y) aliases y
     y = response(formula_schema, subdf)
 
+    # added in PR #109 to handle cases where formula terms introduce missings
+    # to be removed when fixed in StatsModels
+    esample2 = .!ismissing.(y)
+    
     # Obtain X
     Xexo = modelmatrix(formula_schema, subdf)
-
+    
+    # PR #109, to be removed when fixed in StatsModels
+    if size(Xexo, 2) > 0
+        for c in eachcol(Xexo)
+            esample2 .&= .!ismissing.(c)
+        end
+    end
+    
     response_name, coef_names = coefnames(formula_schema)
     if !(coef_names isa Vector)
         coef_names = typeof(coef_names)[coef_names]
@@ -175,26 +186,51 @@ function reg(@nospecialize(df),
         subdf = Tables.columntable((; (x => disallowmissing(view(df[!, x], esample)) for x in endo_vars)...))
         formula_endo_schema = apply_schema(formula_endo, schema(formula_endo, subdf, contrasts), StatisticalModel)
         Xendo = modelmatrix(formula_endo_schema, subdf)
-
+        
+        # PR #109, to be removed when fixed in StatsModels
+        if size(Xendo, 2) > 0
+            for c in eachcol(Xendo)
+                esample2 .&= .!ismissing.(c)
+            end
+        end
+            
         _, coefendo_names = coefnames(formula_endo_schema)
         append!(coef_names, coefendo_names)
 
         subdf = Tables.columntable((; (x => disallowmissing(view(df[!, x], esample)) for x in iv_vars)...))
         formula_iv_schema = apply_schema(formula_iv, schema(formula_iv, subdf, contrasts), StatisticalModel)
         Z = modelmatrix(formula_iv_schema, subdf)
+        
+        for c in eachcol(Z)
+            esample2 .&= .!ismissing.(c)
+        end
+        
+        # PR #109, to be removed when fixed in StatsModels
+        if any(esample2 .== false)
+            Xendo = Xendo[esample2,:]
+            Z = Z[esample2,:]
+        end
 
         Xendo = convert(Matrix{Float64}, Xendo)
         all(isfinite, Xendo) || throw("Some observations for the endogenous variables are infinite")
 
         Z = convert(Matrix{Float64}, Z)
         all(isfinite, Z) || throw("Some observations for the instrumental variables are infinite")
-
+                
         if size(Z, 2) < size(Xendo, 2)
             throw("Model not identified. There must be at least as many ivs as endogeneneous variables")
         end
 
         # modify formula to use in predict
         formula = FormulaTerm(formula.lhs, (tuple(eachterm(formula.rhs)..., (term for term in eachterm(formula_endo.rhs) if term != ConstantTerm(0))...)))
+    end
+    
+    # PR #109, to be removed when fixed in StatsModels
+    if any(esample2 .== false)
+        Xexo = Xexo[esample2,:]
+        y = y[esample2]
+        esample = esample == Colon() ? esample2 : esample[esample2]
+        nobs = sum(esample2)
     end
 
     y = convert(Vector{Float64}, y)
@@ -221,11 +257,11 @@ function reg(@nospecialize(df),
     # Compute data for std errors
     vcov_method = Vcov.materialize(view(df, esample, :), vcov)
 
-
+  
     # compute tss now before potentially demeaning y
     tss_total = tss(y, has_intercept | has_fe_intercept, weights)
 
-    # create unitilaized 
+    # create uninitialized 
     iterations, converged, r2_within = nothing, nothing, nothing
     F_kp, p_kp = nothing, nothing
 
