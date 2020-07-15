@@ -142,29 +142,14 @@ function reg(@nospecialize(df),
         esample = Colon()
     end
     
-
-    # Compute weights
-    if has_weights
-        weights = Weights(convert(Vector{Float64}, view(df, esample, weights)))
-    else
-        weights = Weights(Ones{Float64}(nobs))
-    end
-    all(isfinite, weights) || throw("Weights are not finite")
-    sqrtw = sqrt.(weights)
-
-    # Compute feM, an AbstractFixedEffectSolver
     has_intercept = hasintercept(formula)
     has_fe_intercept = false
     if has_fes
         if any(fe.interaction isa Ones for fe in fes)
             has_fe_intercept = true
         end
-        fes = FixedEffect[_subset(fe, esample) for fe in fes]
-        feM = AbstractFixedEffectSolver{double_precision ? Float64 : Float32}(fes, weights, Val{method})
     end
     
-    # Compute data for std errors
-    vcov_method = Vcov.materialize(view(df, esample, :), vcov)
     ##############################################################################
     ##
     ## Dataframe --> Matrix
@@ -209,6 +194,24 @@ function reg(@nospecialize(df),
         # modify formula to use in predict
         formula = FormulaTerm(formula.lhs, (tuple(eachterm(formula.rhs)..., (term for term in eachterm(formula_endo.rhs) if term != ConstantTerm(0))...)))
     end
+    # Compute weights
+    if has_weights
+        weights = Weights(convert(Vector{Float64}, view(df, esample, weights)))
+    else
+        weights = Weights(Ones{Float64}(nobs))
+    end
+    all(isfinite, weights) || throw("Weights are not finite")
+    sqrtw = sqrt.(weights)
+
+    # Compute feM, an AbstractFixedEffectSolver
+    if has_fes
+        fes = FixedEffect[_subset(fe, esample) for fe in fes]
+        feM = AbstractFixedEffectSolver{double_precision ? Float64 : Float32}(fes, weights, Val{method})
+    end
+
+    # Compute data for std errors
+    vcov_method = Vcov.materialize(view(df, esample, :), vcov)
+
 
     # compute tss now before potentially demeaning y
     tss_total = tss(y, has_intercept | has_fe_intercept, weights)
